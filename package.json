@@ -911,6 +911,7 @@
 		"net": "^1.0.2",
 		"prismjs": "^1.17.1",
 		"terminate": "^2.5.0",
+		"tokenizr": "^1.7.0",
 		"vscode-languageclient": "^7.0.0",
 		"vscode-oniguruma": "^2.0.1",
 		"vscode-textmate": "^9.0.0",

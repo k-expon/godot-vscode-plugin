@@ -1,7 +1,8 @@
-import { TextDocument, Uri } from "vscode";
-import { basename, extname } from "path";
+import { TextDocument, Uri, MarkdownString } from "vscode";
+import { basename } from "path";
 import * as fs from "fs";
-import { SceneNode, Scene } from "./types";
+import { SceneNode, Scene, Tag, Parser, NodeProperty } from "./types";
+import { TokenType } from "../utils/tokenizer";
 import { createLogger } from "../utils";
 
 const log = createLogger("scenes.parser");
@@ -38,134 +39,152 @@ export class SceneParser {
 		this.scenes.set(path, scene);
 
 		const text = document.getText();
+		return Parser.input(text).parse<Scene>(parseScene, scene);
+	}
+}
 
-		for (const match of text.matchAll(/\[ext_resource.*/g)) {
-			const line = match[0];
-			const type = line.match(/type="([\w]+)"/)?.[1];
-			const path = line.match(/path="([\w.:/]+)"/)?.[1];
-			const uid = line.match(/uid="([\w:/]+)"/)?.[1];
-			const id = line.match(/ id="?([\w]+)"?/)?.[1];
+const parseScene = function (this: Parser, scene: Scene): Scene {
 
-			scene.externalResources[id] = {
-				body: line,
-				path: path,
-				type: type,
-				uid: uid,
-				id: id,
-				index: match.index,
-				line: document.lineAt(document.positionAt(match.index)).lineNumber + 1,
-			};
+	for (let token, count = 0; (token = this.lexer.peek()).type !== TokenType.EOF; count++) {
+		if (token.column !== 1 || token.type !== TokenType.BRACKET_OPEN) {
+			this.lexer.token();
+			continue;
 		}
 
-		let lastResource = null;
-		for (const match of text.matchAll(/\[sub_resource.*/g)) {
-			const line = match[0];
-			const type = line.match(/type="([\w]+)"/)?.[1];
-			const path = line.match(/path="([\w.:/]+)"/)?.[1];
-			const uid = line.match(/uid="([\w:/]+)"/)?.[1];
-			const id = line.match(/ id="?([\w]+)"?/)?.[1];
-			const resource = {
-				path: path,
-				type: type,
-				uid: uid,
-				id: id,
-				index: match.index,
-				line: document.lineAt(document.positionAt(match.index)).lineNumber + 1,
+		const tag = this.parse<Tag>(parseTag);
+
+		if (tag.name === "ext_resource") {
+			scene.externalResources[tag.getField("id")] = {
+				body: tag.text,
+				path: tag.getField("path"),
+				type: tag.getField("type"),
+				uid: tag.getField("uid"),
+				id: tag.getField("id"),
+				line: tag.line,
 			};
-			if (lastResource) {
-				lastResource.body = text.slice(lastResource.index, match.index).trimEnd();
+		} else if (tag.name === "sub_resource") {
+			let text = [tag.text];
+			const properties: NodeProperty[] = [];
+			while (this.lexer.peek().type === TokenType.IDENTIFIER) {
+				const property = this.parseProperty();
+				text.push(property.text);
+				properties.push(property);
 			}
-
-			scene.subResources[id] = resource;
-			lastResource = resource;
-		}
-
-		let root = "";
-		const nodes = {};
-		let lastNode = null;
-
-		const nodeRegex = /\[node.*/g;
-		for (const match of text.matchAll(nodeRegex)) {
-			const line = match[0];
-			const name = line.match(/name="([\w]+)"/)?.[1];
-			const type = line.match(/type="([\w]+)"/)?.[1] ?? "PackedScene";
-			let parent = line.match(/parent="([\w\/.]+)"/)?.[1];
-			const instance = line.match(/instance=ExtResource\(\s*"?([\w]+)"?\s*\)/)?.[1];
-
-			// leaving this in case we have a reason to use these node paths in the future
-			// const rawNodePaths = line.match(/node_paths=PackedStringArray\(([\w",\s]*)\)/)?.[1];
-			// const nodePaths = rawNodePaths?.split(",").forEach(x => x.trim().replace("\"", ""));
-
-			let _path = "";
-			let relativePath = "";
-
-			if (parent === undefined) {
-				root = name;
-				_path = name;
-			} else if (parent === ".") {
-				parent = root;
-				relativePath = name;
-				_path = `${parent}/${name}`;
-			} else {
-				relativePath = `${parent}/${name}`;
-				parent = `${root}/${parent}`;
-				_path = `${parent}/${name}`;
+			scene.subResources[tag.getField("id")] = {
+				body: text.join("\n"),
+				path: tag.getField("path"),
+				type: tag.getField("type"),
+				uid: tag.getField("uid"),
+				id: tag.getField("id"),
+				line: tag.line,
+				properties: properties,
+			};
+		} else if (tag.name === "node") {
+			let text = [tag.text];
+			const properties: NodeProperty[] = [];
+			while (this.lexer.peek().type === TokenType.IDENTIFIER) {
+				const property = this.parseProperty();
+				text.push(property.text);
+				properties.push(property);
 			}
-			if (lastNode) {
-				lastNode.body = text.slice(lastNode.position, match.index);
-				lastNode.parse_body();
-			}
-			if (lastResource) {
-				lastResource.body = text.slice(lastResource.index, match.index).trimEnd();
-				lastResource = null;
+			
+			const name = tag.getField("name");
+			const type = tag.getField("type") ?? "PackedScene";
+
+			let parent = tag.getField("parent");
+			let path = {
+				absolute: name,
+				relative: name
+			};
+
+			if (parent) {
+				if (parent === ".") {
+					parent = scene.root.path;
+					path.relative = name;
+					path.absolute = `${parent}/${name}`;
+				} else {
+					path.relative = `${parent}/${name}`;
+					parent = `${scene.root.path}/${parent}`;
+					path.absolute = `${parent}/${name}`;
+				}
 			}
 
 			const node = new SceneNode(name, type);
-			node.path = _path;
 			node.description = type;
-			node.relativePath = relativePath;
+			node.path = path.absolute;
+			node.relativePath = path.relative;
 			node.parent = parent;
-			node.text = match[0];
-			node.position = match.index;
+			node.text = tag.text;
+			node.body = text.join("\n");
+			node.position = tag.pos;
 			node.resourceUri = Uri.from({
 				scheme: "godot",
-				path: _path,
+				path: path.absolute,
 			});
-			scene.nodes.set(_path, node);
+			node.properties = properties;
+			node.unique = properties.find(p => p.name === "unique_name_in_owner")?.value ?? false;
 
-			if (instance) {
-				if (instance in scene.externalResources) {
-					node.tooltip = scene.externalResources[instance].path;
-					node.resourcePath = scene.externalResources[instance].path;
-					if ([".tscn"].includes(extname(node.resourcePath))) {
-						node.contextValue += "openable";
-					}
+			const instance = tag.getField("instance");
+			if (instance?.length > 0) {
+				const id = instance[0];
+				node.tooltip = scene.externalResources[id].path;
+				node.resourcePath = scene.externalResources[id].path;
+				if (node.resourcePath?.includes(".tscn")) {
+					node.contextValue += "openable";
 				}
 				node.contextValue += "hasResourcePath";
 			}
-			if (_path === root) {
+
+			const script = properties.find(p => p.name === "script");
+			if (script) {
+				node.hasScript = true;
+				node.scriptId = script.value[0];
+				node.contextValue += "hasScript";
+			}
+
+			
+			if (parent === undefined) {
 				scene.root = node;
+			} else if (parent) {
+				scene.nodes.get(parent)?.children.push(node);
 			}
-			if (parent in nodes) {
-				nodes[parent].children.push(node);
-			}
-			nodes[_path] = node;
 
-			lastNode = node;
-		}
+			scene.nodes.set(path.absolute, node);
 
-		if (lastNode) {
-			lastNode.body = text.slice(lastNode.position, text.length);
-			lastNode.parse_body();
+			const content = new MarkdownString();
+			content.appendCodeblock(node.body, "gdresource");
+			node.tooltip = content;
 		}
-
-		const resourceRegex = /\[resource\]/g;
-		for (const match of text.matchAll(resourceRegex)) {
-			if (lastResource) {
-				lastResource.body = text.slice(lastResource.index, match.index).trimEnd();
-				lastResource = null;
-			}
-		}
-		return scene;
 	}
+	return scene;
+}
+
+const parseTag = function (this: Parser): Tag {
+
+	const token = this.lexer.consume(TokenType.BRACKET_OPEN);
+
+	let tagName = this.lexer.consume(TokenType.IDENTIFIER).value;
+
+	if (this.lexer.peek().type === TokenType.COLON || this.lexer.peek().type === TokenType.PERIOD) {
+		const type = this.lexer.token();
+		const value = this.lexer.consume(TokenType.IDENTIFIER).value;
+		tagName += type.value + value;
+	}
+
+	const tag = new Tag(tagName);
+	tag.line = token.line;
+	tag.pos = token.pos;
+
+	const texts = [tagName];
+	while (this.lexer.peek().type !== TokenType.BRACKET_CLOSE && this.lexer.peek().type !== TokenType.EOF) {
+		const field = this.parseProperty();
+		tag.addField(field.name, field.value);
+		texts.push(field.text);
+	}
+	this.lexer.consume(TokenType.BRACKET_CLOSE);
+
+	const text = texts.join(' ');
+	tag.text = `[${text}]`;
+
+	return tag;
 }
