@@ -30,6 +30,7 @@ import {
 } from "../utils";
 import { SceneParser } from "./parser";
 import type { SceneNode, Scene } from "./types";
+import { globals } from "../extension";
 
 const log = createLogger("scenes.preview");
 
@@ -278,11 +279,13 @@ export class ScenePreviewProvider
 	}
 
 	private tree_selection_changed(event: vscode.TreeViewSelectionChangeEvent<SceneNode>) {
-		// const item = event.selection[0];
+		const item = event.selection[0];
 		// log(item.body);
 		// const editor = vscode.window.activeTextEditor;
 		// const range = editor.document.getText()
 		// editor.revealRange(range)
+
+		globals.inspectorProvider.updateView(item);
 	}
 
 	public getChildren(element?: SceneNode): ProviderResult<SceneNode[]> {

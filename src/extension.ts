@@ -12,7 +12,7 @@ import {
 	GDTaskProvider,
 } from "./providers";
 import { ClientConnectionManager } from "./lsp";
-import { ScenePreviewProvider } from "./scene_tools";
+import { ScenePreviewProvider,InspectorViewProvider } from "./scene_tools";
 import { GodotDebugger } from "./debugger";
 import { FormattingProvider } from "./formatter";
 import {
@@ -42,6 +42,7 @@ interface Extension {
 	semanticTokensProvider?: GDSemanticTokensProvider;
 	completionProvider?: GDCompletionItemProvider;
 	tasksProvider?: GDTaskProvider;
+	inspectorProvider?: InspectorViewProvider;
 }
 
 export const globals: Extension = {};
@@ -62,6 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// globals.semanticTokensProvider = new GDSemanticTokensProvider(context);
 	// globals.completionProvider = new GDCompletionItemProvider(context);
 	// globals.tasksProvider = new GDTaskProvider(context);
+	globals.inspectorProvider = new InspectorViewProvider(context);
 
 	context.subscriptions.push(
 		register_command("openEditor", open_workspace_with_editor),
