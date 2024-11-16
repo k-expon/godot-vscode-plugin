@@ -187,7 +187,7 @@ export class Parser {
 				ctx.accept(TokenType.COLOR);
 			})
 			.rule(/"((?:\\.|[^"\\])*)"|&"((?:\\.|[^"\\])*)"/, (ctx, match) => {
-				let value = (match[1] || match[2]).replace(/\\(.)/g, (_, char) => {
+				let value = (match[1] || match[2] || '').replace(/\\(.)/g, (_, char) => {
 					const escapes = { 'b': '\b', 't': '\t', 'n': '\n', 'f': '\f', 'r': '\r' }
 					return escapes[char] || char
 				});
